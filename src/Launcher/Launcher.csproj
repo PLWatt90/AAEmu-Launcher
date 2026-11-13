@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- The exe name players see. scripts\Build.ps1 passes the config's exeName as -p:LauncherName=... -->
+    <LauncherName Condition="'$(LauncherName)' == ''">AAEmu-Launcher</LauncherName>
+    <AssemblyName>$(LauncherName)</AssemblyName>
+    <RootNamespace>AAEmuLauncher</RootNamespace>
+    <Version>1.4.0</Version>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- Published as one self-contained exe so players need no .NET install:
+         dotnet publish -c Release  (RuntimeIdentifier / SelfContained / single file set below) -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <PublishTrimmed>false</PublishTrimmed>
+    <DebugType>embedded</DebugType>
+    <NoWarn>CS8632;CA1416;IDE0063</NoWarn>
+    <ConfigDir>$(MSBuildThisFileDirectory)..\..\config\</ConfigDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Server settings: config\launcher.config.json (yours, not in git), else the example. -->
+    <EmbeddedResource Include="$(ConfigDir)launcher.config.json" LogicalName="AAEmuLauncher.launcher.config.json"
+                      Condition="Exists('$(ConfigDir)launcher.config.json')" />
+    <EmbeddedResource Include="$(ConfigDir)launcher.config.example.json" LogicalName="AAEmuLauncher.launcher.config.json"
+                      Condition="!Exists('$(ConfigDir)launcher.config.json')" />
+    <!-- Background art: config\background.jpg when you supply one, else the bundled Assets\launcher-background.jpg. -->
+    <EmbeddedResource Include="$(ConfigDir)background.jpg" LogicalName="AAEmuLauncher.Background.jpg"
+                      Condition="Exists('$(ConfigDir)background.jpg')" />
+    <EmbeddedResource Include="Assets\launcher-background.jpg" LogicalName="AAEmuLauncher.Background.jpg"
+                      Condition="!Exists('$(ConfigDir)background.jpg')" />
+  </ItemGroup>
+  <!-- Optional window/exe icon: config\launcher.ico -->
+  <PropertyGroup Condition="Exists('$(ConfigDir)launcher.ico')">
+    <ApplicationIcon>$(ConfigDir)launcher.ico</ApplicationIcon>
+  </PropertyGroup>
+</Project>

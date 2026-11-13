@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Test helper: creates an empty game_pak (MakeTestPak <path>) so the patch flow can be tested without a client. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <NoWarn>CS8632;CA1416;IDE0063</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\..\src\AAPatch\AAPak\*.cs" Link="AAPak\%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

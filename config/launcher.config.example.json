@@ -1,0 +1,45 @@
+{
+  // Copy this file to launcher.config.json (scripts\Setup-Server.ps1 does it for you) and edit it.
+  // It is embedded into the launcher exe at build time. A launcher.config.json placed next to a built
+  // exe overrides it field by field, so a prebuilt exe can be configured without rebuilding.
+  // Full reference: docs/configuration.md
+
+  // Name of the game shown in the window title and heading, and the line under it.
+  "productName": "ArcheAge",
+  "subtitle": "Launcher",
+
+  // File name of the launcher exe (without .exe). The self-update looks for this name on the patch
+  // server, so keep it stable once players have the launcher.
+  "exeName": "AAEmu-Launcher",
+
+  // Address of your AAEmu.Login server, pre-filled in the Server field for new players.
+  "defaultServer": "127.0.0.1",
+  // Old addresses; players whose launcher.json still holds one are moved to defaultServer.
+  "retiredServers": [],
+  // AAEmu.Login port (1237 in a stock install).
+  "authPort": 1237,
+
+  // "trusted":  stock AAEmu. The login server logs in by account name alone (no password).
+  // "password": your AAEmu.Login implements the launcher password protocol (docs/login-protocol.md):
+  //             password + optional PIN, "Create account" and "Forgot password?" in the launcher.
+  "authMode": "trusted",
+
+  // Where players download patches. Empty = http://<Server field>:<patchPort>/ (the patch server runs
+  // on the same machine as the login server). Set it to a public URL, e.g. "http://patch.example.com:8099/",
+  // when players reach the patch server under a different name.
+  "patchUrl": "",
+  "patchPort": 8099,
+
+  // Public half of your patch signing key, printed by scripts\Setup-Server.ps1 ("aapatch keygen").
+  // Required for HTTP patching: without it the launcher refuses every patch server.
+  "patchPublicKey": "",
+
+  // Optional Windows file share fallback (\\<server>\<shareName>), tried when the patch server cannot be
+  // reached. Leave empty unless you set one up (scripts\New-PatchShareUser.ps1).
+  "shareName": "",
+  "shareUser": "aapatch",
+
+  // Written once into Documents\ArcheAge\system.cfg as "locale = <value>" (e.g. "en_us") for clients
+  // that would otherwise start in another language. Empty = leave system.cfg alone.
+  "clientLocale": ""
+}

@@ -1,0 +1,21 @@
+bin/
+obj/
+out/
+*.user
+.vs/
+.vscode/
+
+# Your server's settings and art stay local; the *.example files are the templates.
+config/launcher.config.json
+config/publish.config.json
+config/patch-entries.txt
+config/background.jpg
+config/launcher.ico
+
+# Never commit key material.
+*.pem
+*.key
+*.pfx
+
+# Test scratch output
+tests/work/

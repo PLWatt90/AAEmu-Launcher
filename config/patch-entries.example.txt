@@ -1,0 +1,8 @@
+# Inner game_pak paths that scripts\Make-Patch.ps1 publishes to players, one per line.
+# Copy this file to patch-entries.txt and list every pak entry your server changes.
+# When you add a new script file, also list the folder's toc.g that loads it.
+#
+# Examples:
+# game/db/compact.sqlite3
+# game/scripts/x2ui/ingameshop/toc.g
+# game/scriptsbin64/x2ui/ingameshop/toc.g

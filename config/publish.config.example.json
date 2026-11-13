@@ -1,0 +1,23 @@
+{
+  // Settings for scripts\Make-Patch.ps1 on the server machine. Copy to publish.config.json and edit.
+  // Never embedded into anything players get. Full reference: docs/configuration.md
+
+  // The game_pak that holds your client changes (the "master" pak you edit on the server machine).
+  "pak": "C:\\AAEmu\\Client\\game_pak",
+
+  // The folder players download from (served by the patch server). Make-Patch rewrites it.
+  "patchDir": "C:\\AAEmu\\Patch",
+
+  // Private patch signing key from "aapatch keygen". Empty = %LOCALAPPDATA%\AAEmu-Launcher\patch-signing-key.pem.
+  // Must NOT be inside patchDir. Back it up: losing it means every player needs a new launcher.
+  "signingKey": "",
+
+  // Text file with one inner pak path per line (# starts a comment), relative to this config folder.
+  "entriesFile": "patch-entries.txt",
+
+  // Extra files copied into patchDir as they are (e.g. a README for players). Not part of the pak patch.
+  "extraFiles": [],
+
+  // Optional: client folders on this machine that should also get the fresh aapatch.exe and launcher.
+  "copyToClients": []
+}

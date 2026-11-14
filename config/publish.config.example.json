@@ -18,6 +18,10 @@
   // Extra files copied into patchDir as they are (e.g. a README for players). Not part of the pak patch.
   "extraFiles": [],
 
+  // Optional: loose client files (outside game_pak) the launcher keeps up to date, e.g.
+  //   { "from": "C:\\AAEmu\\Client\\game\\db\\compact.sqlite3", "to": "game/db/compact.sqlite3" }
+  "looseFiles": [],
+
   // Optional: client folders on this machine that should also get the fresh aapatch.exe and launcher.
   "copyToClients": []
 }

@@ -293,7 +293,7 @@ internal sealed class LauncherCore
 
     /// <summary>Client root: the folder holding Bin64\ and game_pak (the launcher's own folder).</summary>
     public string RootDir { get; }
-    public string Bin64Dir => Path.Combine(RootDir, "Bin64");
+    public string Bin64Dir => Path.Combine(RootDir, Program.Config.ClientDir);
     public string ClientExe => Path.Combine(Bin64Dir, "archeage.exe");
     public string PakPath => Path.Combine(RootDir, "game_pak");
 
@@ -656,6 +656,23 @@ internal sealed class LauncherCore
             return new UpdateOutcome(UpdateKind.Failed, 2);
         }
 
+        // Loose client files (index paths "files/<path under the client root>"), e.g. the 1.2 client's
+        // game\db\compact.sqlite3, which the client reads outside game_pak. Same signed index, same checks.
+        int loosePending;
+        try
+        {
+            loosePending = SyncLooseFiles(source, index, dryRun);
+        }
+        catch (PatchTrustException exception)
+        {
+            return Refused(url, exception.Message);
+        }
+        catch (Exception exception)
+        {
+            _log($"Updating the client files failed: {exception.Message}");
+            return new UpdateOutcome(UpdateKind.Failed, 2);
+        }
+
         // Which entries does this pak lack? "aapatch status" reads only manifest.txt for that.
         var staging = DownloadDir;
         try
@@ -676,7 +693,7 @@ internal sealed class LauncherCore
         if (status == 0 && (dryRun || statusLines.Any(l => l.StartsWith("up to date", StringComparison.Ordinal))))
         {
             TryDeleteDownloads(staging);
-            return new UpdateOutcome(UpdateKind.UpToDate, 0);
+            return dryRun && loosePending > 0 ? new UpdateOutcome(UpdateKind.Pending, 1) : new UpdateOutcome(UpdateKind.UpToDate, 0);
         }
         if (status is not (0 or 1))
             return new UpdateOutcome(UpdateKind.Failed, status.Value);
@@ -722,6 +739,47 @@ internal sealed class LauncherCore
         if (outcome.Kind == UpdateKind.UpToDate)
             TryDeleteDownloads(staging);
         return outcome;
+    }
+
+    /// <summary>Prefix of index paths that are loose files under the client root, not game_pak entries.</summary>
+    public const string LoosePrefix = "files/";
+
+    /// <summary>
+    /// Brings every "files/..." entry of the signed index into the client root (download, size + SHA-256
+    /// check, swap in whole). Returns how many differed; in a dry run nothing is written.
+    /// </summary>
+    private int SyncLooseFiles(HttpPatchSource source, Dictionary<string, IndexEntry> index, bool dryRun)
+    {
+        var loose = index.Values.Where(e => e.Path.StartsWith(LoosePrefix, StringComparison.Ordinal)).OrderBy(e => e.Path, StringComparer.Ordinal).ToList();
+        if (loose.Count == 0)
+            return 0;
+        var pending = new List<(IndexEntry Entry, string Target)>();
+        foreach (var entry in loose)
+        {
+            var target = HttpPatchSource.LocalPath(RootDir, entry.Path[LoosePrefix.Length..]);
+            if (!HttpPatchSource.FileMatches(target, entry.Size, entry.Sha256))
+                pending.Add((entry, target));
+        }
+        if (pending.Count == 0)
+        {
+            _log($"Client files: all {loose.Count} up to date.");
+            return 0;
+        }
+        var wire = pending.Sum(p => HttpPatchSource.WireSize(p.Entry));
+        if (dryRun)
+        {
+            _log($"Client files: {pending.Count} of {loose.Count} to update ({wire / 1048576.0:N1} MB).");
+            foreach (var p in pending)
+                _log("    update   " + p.Entry.Path[LoosePrefix.Length..]);
+            return pending.Count;
+        }
+        _log($"Client files: downloading {pending.Count} of {loose.Count} ({wire / 1048576.0:N1} MB) ...");
+        foreach (var p in pending)
+        {
+            source.Download(p.Entry, p.Target);
+            _log("    updated  " + p.Entry.Path[LoosePrefix.Length..]);
+        }
+        return pending.Count;
     }
 
     private UpdateOutcome Refused(string url, string reason)
@@ -814,18 +872,34 @@ internal sealed class LauncherCore
     public static string BuildArguments(string account, string server, string token, string pinToken = "")
     {
         var passport = BuildPassport(account, server, token, pinToken).Replace("\"", "\\\"");
+        var template = Program.Config.ClientArguments;
+        if (template.Length > 0)
+            return template
+                .Replace("{account}", account).Replace("{server}", server)
+                .Replace("{port}", Program.AuthPort.ToString(System.Globalization.CultureInfo.InvariantCulture))
+                .Replace("{token}", token).Replace("{pinToken}", pinToken).Replace("{passport}", passport)
+                .Replace("{root}", RootDirForArgs).Replace("{clientExe}", ClientExeForArgs);
         return $"-k \"{passport}\" +auth_serveraddr {server} +auth_serverport {Program.AuthPort} +auth_ip {server} +auth_port {Program.AuthPort}";
     }
+
+    // Paths for the {root} / {clientExe} placeholders (set by StartGame; the client root of this launcher).
+    private static string RootDirForArgs = Program.ExeDir.TrimEnd(Path.DirectorySeparatorChar);
+    private static string ClientExeForArgs = Path.Combine(RootDirForArgs, Program.Config.ClientDir, "archeage.exe");
 
     public void StartGame(string account, string server, string password, string pin)
     {
         _log($"Starting ArcheAge as account \"{account}\" against {server}:{Program.AuthPort} ...");
+        RootDirForArgs = RootDir.TrimEnd(Path.DirectorySeparatorChar);
+        ClientExeForArgs = ClientExe;
+        var startExe = Program.Config.StartExe.Length > 0 ? Path.Combine(RootDir, Program.Config.StartExe) : ClientExe;
+        if (!File.Exists(startExe))
+            throw new FileNotFoundException($"{startExe} not found");
         var info = new ProcessStartInfo
         {
-            FileName = ClientExe,
+            FileName = startExe,
             Arguments = BuildArguments(account, server, BuildToken(account, password),
                 pin.Length > 0 ? BuildPinToken(account, pin) : ""), // verbatim
-            WorkingDirectory = Bin64Dir,
+            WorkingDirectory = Program.Config.StartExe.Length > 0 ? Path.GetDirectoryName(startExe)! : Bin64Dir,
             UseShellExecute = true,
         };
         using var process = Process.Start(info) ?? throw new InvalidOperationException("Windows did not start the process.");

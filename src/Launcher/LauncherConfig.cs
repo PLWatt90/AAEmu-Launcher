@@ -85,6 +85,25 @@ internal sealed class LauncherConfig
     /// </summary>
     public string ClientLocale { get; set; } = "";
 
+    /// <summary>
+    /// Folder under the client root that holds archeage.exe: "Bin64" (default) or e.g. "bin32" for 1.2 clients.
+    /// </summary>
+    public string ClientDir { get; set; } = "Bin64";
+
+    /// <summary>
+    /// archeage.exe command line template. Empty = the stock "-k passport +auth_..." line. Placeholders:
+    /// {account} {server} {port} {token} {pinToken} {passport} (passport already quote-escaped).
+    /// {root} and {clientExe} give the client's paths to a startExe (e.g. the 1.2 Rust aaemu-launcher).
+    /// </summary>
+    public string ClientArguments { get; set; } = "";
+
+    /// <summary>
+    /// Program Play starts instead of archeage.exe, relative to the client root (e.g. "aaemu-rs\aaemu-launcher.exe"
+    /// for the 1.2 Rust launcher, which then starts the client). Empty = start archeage.exe directly.
+    /// Placeholders {clientExe} and {root} in clientArguments give it the client's paths.
+    /// </summary>
+    public string StartExe { get; set; } = "";
+
     private static readonly JsonSerializerOptions Options = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -160,6 +179,19 @@ internal sealed class LauncherConfig
         ShareName = (ShareName ?? "").Trim().Trim('\\');
         ShareUser = string.IsNullOrWhiteSpace(ShareUser) ? "aapatch" : ShareUser.Trim();
         ClientLocale = (ClientLocale ?? "").Trim();
+        ClientDir = (ClientDir ?? "").Trim().Trim('\\', '/');
+        if (ClientDir.Length == 0 || ClientDir.Contains("..") || Path.IsPathRooted(ClientDir))
+        {
+            if (ClientDir.Length > 0) Problems.Add($"clientDir \"{ClientDir}\" is not a plain subfolder; using Bin64.");
+            ClientDir = "Bin64";
+        }
+        ClientArguments = (ClientArguments ?? "").Trim();
+        StartExe = (StartExe ?? "").Trim().Trim('\\', '/');
+        if (StartExe.Length > 0 && (StartExe.Contains("..") || Path.IsPathRooted(StartExe)))
+        {
+            Problems.Add($"startExe \"{StartExe}\" must be a path inside the client folder; starting archeage.exe instead.");
+            StartExe = "";
+        }
         if (AuthPort is <= 0 or >= 65536)
         {
             Problems.Add($"authPort {AuthPort} is not a port; using 1237.");

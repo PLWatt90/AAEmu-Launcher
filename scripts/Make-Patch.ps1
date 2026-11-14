@@ -67,8 +67,13 @@ if (-not (Test-Path $tool)) { if ($NoBuild) { throw "$tool not built" } else { B
 if (-not (Test-Path $launcher)) { if ($NoBuild) { throw "$launcher not built" } else { Build-Launcher } }
 $launcherName = Split-Path -Leaf $launcher
 
-& $tool manifest $Pak $PatchDir @Entries
-if ($LASTEXITCODE -ne 0) { throw "aapatch manifest failed with exit code $LASTEXITCODE" }
+# The entries go through a list file: a long list does not fit on the Windows command line.
+$entriesList = Join-Path ([System.IO.Path]::GetTempPath()) ('aa-entries-' + [guid]::NewGuid().ToString('N') + '.txt')
+[System.IO.File]::WriteAllLines($entriesList, [string[]]$Entries, (New-Object System.Text.UTF8Encoding $false))
+try {
+    & $tool manifest $Pak $PatchDir "@$entriesList"
+    if ($LASTEXITCODE -ne 0) { throw "aapatch manifest failed with exit code $LASTEXITCODE" }
+} finally { Remove-Item $entriesList -Force -ErrorAction SilentlyContinue }
 Copy-Item $tool (Join-Path $PatchDir 'aapatch.exe') -Force
 Copy-Item $launcher (Join-Path $PatchDir $launcherName) -Force
 foreach ($extra in @($settings.extraFiles)) {
@@ -77,6 +82,33 @@ foreach ($extra in @($settings.extraFiles)) {
     Copy-Item $source $PatchDir -Force
     Write-Host "copied $source"
 }
+# Loose client files: looseFiles = [{ "from": <file or folder on this PC>, "to": <path under the client root> }].
+# They are published under files/<to> and the launcher writes them into the client folder (not into game_pak).
+$looseRoot = Join-Path $PatchDir 'files'
+if (Test-Path $looseRoot) { Remove-Item $looseRoot -Recurse -Force }
+$looseRel = New-Object System.Collections.Generic.List[string]
+foreach ($item in @($settings.looseFiles)) {
+    if (-not $item) { continue }
+    $from = if ([IO.Path]::IsPathRooted($item.from)) { $item.from } else { Join-Path $configFolder $item.from }
+    $to = ("$($item.to)" -replace '\\', '/').Trim('/')
+    if (-not $to -or $to -match '(^|/)\.\.?(/|$)' -or $to.Contains(':')) { throw "looseFiles: bad target '$($item.to)'" }
+    if (-not (Test-Path $from)) { throw "looseFiles: $from not found" }
+    $src = Get-Item $from
+    $pairs = New-Object System.Collections.Generic.List[object]
+    if ($src.PSIsContainer) {
+        foreach ($f in Get-ChildItem $src.FullName -Recurse -File) {
+            $pairs.Add([pscustomobject]@{ From = $f.FullName; To = $to + '/' + $f.FullName.Substring($src.FullName.TrimEnd('\').Length + 1).Replace('\', '/') })
+        }
+    } else { $pairs.Add([pscustomobject]@{ From = $src.FullName; To = $to }) }
+    foreach ($pair in $pairs) {
+        $dest = Join-Path $looseRoot ($pair.To -replace '/', '\')
+        New-Item -ItemType Directory -Force (Split-Path $dest -Parent) | Out-Null
+        Copy-Item -LiteralPath $pair.From $dest -Force
+        $looseRel.Add('files/' + $pair.To)
+    }
+}
+if ($looseRel.Count -gt 0) { Write-Host "copied $($looseRel.Count) loose client files" }
+
 foreach ($client in @($settings.copyToClients)) {
     if (-not $client) { continue }
     Copy-Item $tool (Join-Path $client 'aapatch.exe') -Force
@@ -90,10 +122,10 @@ foreach ($client in @($settings.copyToClients)) {
 $utf8 = New-Object System.Text.UTF8Encoding $false
 $lines = New-Object System.Collections.Generic.List[string]
 $lines.Add('# patch server index: path|size|sha256|gzSize|modifiedUtc (signed: index.txt.sig)')
-$published = @($Entries | ForEach-Object { ($_ -replace '\\', '/').TrimStart('/') }) + @('manifest.txt', 'aapatch.exe', $launcherName)
+$published = @($Entries | ForEach-Object { ($_ -replace '\\', '/').TrimStart('/') }) + @('manifest.txt', 'aapatch.exe', $launcherName) + @($looseRel)
 foreach ($rel in $published) {
-    $file = Get-Item (Join-Path $PatchDir ($rel -replace '/', '\'))
-    $sha = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    $file = Get-Item -LiteralPath (Join-Path $PatchDir ($rel -replace '/', '\'))
+    $sha = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     $gzPath = $file.FullName + '.gz'
     $gzSize = 0
     if ($file.Length -ge 1MB) {

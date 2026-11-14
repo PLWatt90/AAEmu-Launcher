@@ -50,11 +50,19 @@ New-Item -ItemType Directory (Split-Path $serverPak) | Out-Null
 
 $patchDir = Join-Path $W 'patch'
 'game/test/hello.txt', 'game/test/big.bin' | Set-Content (Join-Path $W 'entries.txt')
-@{ pak = $serverPak; patchDir = $patchDir; signingKey = $key; entriesFile = 'entries.txt'; extraFiles = @(); copyToClients = @() } |
-    ConvertTo-Json | Set-Content (Join-Path $W 'publish.config.json')
+# loose client files: one single file and one folder (published under files/, written next to game_pak)
+'loose database' | Set-Content (Join-Path $src 'loose.db')
+New-Item -ItemType Directory (Join-Path $src 'tools\sub') | Out-Null
+'tool one' | Set-Content (Join-Path $src 'tools\one.txt')
+'tool two' | Set-Content (Join-Path $src 'tools\sub\two.txt')
+@{ pak = $serverPak; patchDir = $patchDir; signingKey = $key; entriesFile = 'entries.txt'; extraFiles = @(); copyToClients = @()
+   looseFiles = @(@{ from = "$src\loose.db"; to = 'game/db/loose.db' }, @{ from = "$src\tools"; to = 'tools' }) } |
+    ConvertTo-Json -Depth 4 | Set-Content (Join-Path $W 'publish.config.json')
 & (Join-Path $Repo 'scripts\Make-Patch.ps1') -Config (Join-Path $W 'publish.config.json') -NoBuild | Out-Null
 Check 'Make-Patch wrote a signed index' ((Test-Path "$patchDir\index.txt") -and (Test-Path "$patchDir\index.txt.sig"))
 Check 'large file got a .gz copy' (Test-Path "$patchDir\game\test\big.bin.gz")
+$indexText = [IO.File]::ReadAllText("$patchDir\index.txt")
+Check 'loose files are in the signed index' ($indexText -match 'files/game/db/loose.db\|' -and $indexText -match 'files/tools/sub/two.txt\|')
 
 # ---- client: launcher copy configured by a side launcher.config.json
 $clientTool = Join-Path $W 'launcher'
@@ -109,6 +117,21 @@ try {
     Check 'A: second run is up to date' ($r.Code -eq 0 -and $r.Text -match 'up to date') $r.Text
     & $aapatch verify "$a\game_pak" $patchDir | Out-Null
     Check 'A: aapatch verify' ($LASTEXITCODE -eq 0)
+    # --test-update uses the tool folder as the client root, so the loose files land there
+    Check 'A: loose files written into the client folder' (((Get-Content "$clientTool\game\db\loose.db") -eq 'loose database') -and
+        ((Get-Content "$clientTool\tools\sub\two.txt") -eq 'tool two'))
+
+    # J: a loose file changed on the client is restored; a loose file swapped on the server is refused
+    'edited by the player' | Set-Content "$clientTool\game\db\loose.db"
+    $r = Update $a
+    Check 'J: changed loose file restored' ($r.Code -eq 0 -and ((Get-Content "$clientTool\game\db\loose.db") -eq 'loose database')) $r.Text
+    $served = "$patchDir\files\tools\one.txt"
+    Copy-Item $served "$W\one.bak" -Force
+    'tampered' | Set-Content $served
+    Remove-Item "$clientTool\tools\one.txt"
+    $r = Update $a
+    Check 'J: swapped loose file refused' ($r.Code -ne 0 -and -not (Test-Path "$clientTool\tools\one.txt")) $r.Text
+    Copy-Item "$W\one.bak" $served -Force
 
     # B: one byte of index.txt changed -> refused
     Copy-Item "$patchDir\index.txt" "$W\index.bak" -Force
@@ -176,6 +199,15 @@ try {
 $token = (Invoke-Launcher @('--print-token', 'Alice', 'correct horse')).Text.Trim()
 $expected = 'v1:' + [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes('aaemu-launcher|alice|correct horse'))).Replace('-', '').ToLower()
 Check 'I: password token formula' ($token -eq $expected) "$token <> $expected"
+
+# K: clientDir / clientArguments placeholders build the start command line
+@{ patchPublicKey = $publicKey; authPort = 1237; clientDir = 'bin32'
+   clientArguments = '--client "{clientExe}" --login {server}:{port} --user {account}' } |
+    ConvertTo-Json | Set-Content (Join-Path $clientTool 'launcher.config.json')
+$argsLine = (Invoke-Launcher @('--print-args', 'Alice', '10.0.0.5', 'pw')).Text
+Check 'K: clientArguments placeholders' ($argsLine -match [regex]::Escape('--login 10.0.0.5:1237 --user Alice') -and
+    $argsLine -match [regex]::Escape('\bin32\archeage.exe"')) $argsLine
+Set-SideConfig $publicKey
 
 Write-Host ''
 if ($script:failures -eq 0) { Write-Host 'All tests passed.' -ForegroundColor Green; exit 0 }

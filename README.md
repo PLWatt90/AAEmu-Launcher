@@ -195,6 +195,12 @@ so only use it on a network you control.
 
 Rebuild with `scripts\Build.ps1` and publish with `scripts\Make-Patch.ps1`.
 
+**1.2 clients.** `clientDir`, `clientArguments` and `startExe` in `launcher.config.json` change where
+`archeage.exe` is and how Play starts it: a 1.2 client sits in `bin32\` and is started through
+AAEmu-1.2-Rust's `aaemu-launcher`. `looseFiles` in `publish.config.json` keeps loose client files up to
+date as well, such as the 1.2 client's `game\db\compact.sqlite3`. The defaults keep the current
+behaviour. Example in [docs/configuration.md](docs/configuration.md#example-12-clients).
+
 **Launcher test modes** (console output, no window, no game start):
 
 ```

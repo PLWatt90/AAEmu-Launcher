@@ -36,6 +36,21 @@ also lists the sources, and warns about unknown setting names.
 | `shareName` | `""` | Windows share for the fallback `\\<server>\<shareName>`. Empty = no share fallback, and the **Store share credential** button is hidden. |
 | `shareUser` | `"aapatch"` | Account name the credential button stores (`cmdkey`). |
 | `clientLocale` | `""` | If set (e.g. `"en_us"`), the first Play writes `Documents\ArcheAge\system.cfg` with only `locale = <value>`, keeping the old file as `system.cfg.before-lan`. It runs once per PC (marker `system.cfg.lan-locale`). `AACFGDIR` overrides the folder. |
+| `clientDir` | `"Bin64"` | Folder under the client root that holds `archeage.exe`, e.g. `"bin32"` for 1.2 clients. A plain subfolder: no `..`, no drive. |
+| `clientArguments` | `""` | The command line Play passes. Empty = the stock `-k "<passport>" +auth_serveraddr ...` line. Placeholders: `{account}` `{server}` `{port}` (= `authPort`) `{token}` `{pinToken}` `{passport}` (quotes already escaped) `{root}` (client root) `{clientExe}` (full path of `<clientDir>\archeage.exe`). |
+| `startExe` | `""` | Program Play starts instead of `archeage.exe`, relative to the client root (for a client that must be started through another launcher). It gets `clientArguments`; its folder is the working directory. Inside the client folder only. |
+
+### Example: 1.2 clients
+
+1.2 clients on [AAEmu-1.2-Rust](https://github.com/AAEmu/AAEmu-1.2-Rust), started through its `aaemu-launcher`
+(login ticket + `aadriver`). Publish `aaemu-launcher.exe` and its `aadriver\` folder as loose files under
+`aaemu-rs/` (see `looseFiles` below), plus a small `avvia.cmd`/`start.cmd` that runs
+`"%~dp0aaemu-launcher.exe" %*` (it prompts for the password):
+
+```json
+{ "authPort": 1237, "clientDir": "bin32", "startExe": "aaemu-rs\\start.cmd",
+  "clientArguments": "--client \"{clientExe}\" --login {server}:{port} --user {account} --lang en_us --sound" }
+```
 
 ### Patch source order
 
@@ -59,6 +74,10 @@ into the Patch source field. An empty field means the default.
 | `entriesFile` | Inner pak paths to publish, relative to the config folder. Default `patch-entries.txt`. |
 | `extraFiles` | Files copied into `patchDir` as they are (e.g. a player README). Not part of the pak patch or the signed index. |
 | `copyToClients` | Client folders on this machine that should also get the fresh `aapatch.exe` and launcher. |
+| `looseFiles` | Loose client files, outside `game_pak`: `[{ "from": "<file or folder here>", "to": "<path under the client root>" }]`. Published under `files/<to>` in the signed index; the launcher writes them into the client folder. For data the client reads loose (e.g. the 1.2 client's `game/db/compact.sqlite3`) or helper programs. |
+
+The entries file may be long: Make-Patch hands it to `aapatch manifest` as `@<list file>`, so the
+Windows command-line limit does not apply.
 
 `Make-Patch.ps1` parameters (`-Pak`, `-PatchDir`, `-SigningKey`, `-Entries`, `-Config`, `-NoBuild`)
 override the file.

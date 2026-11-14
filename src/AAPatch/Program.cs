@@ -48,7 +48,11 @@ internal static class Program
             switch (args[0].ToLowerInvariant())
             {
                 case "manifest":
-                    return args.Length >= 4 ? Manifest(args[1], args[2], args[3..]) : Usage();
+                    // "@file" names a text file with one inner path per line (# comments), for lists longer
+                    // than the Windows command line allows.
+                    return args.Length >= 4 ? Manifest(args[1], args[2], args[3..].SelectMany(a => a.StartsWith('@')
+                        ? File.ReadAllLines(a[1..]).Select(l => l.Trim()).Where(l => l.Length > 0 && !l.StartsWith('#'))
+                        : [a]).ToArray()) : Usage();
                 case "apply":
                     return args.Length == 3 ? Apply(args[1], args[2], dryRun: false) : Usage();
                 case "status":

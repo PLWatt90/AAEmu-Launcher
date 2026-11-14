@@ -9,6 +9,7 @@
   manifest.txt          patch id + the pak entries (aapatch manifest)
   game\...\<entries>    the exported pak entries, at their inner paths
   game\...\<entry>.gz   gzip copy of every entry of 1 MB or more
+  files\...\<file>      loose client files (looseFiles), at their path under the client root
   aapatch.exe
   <exeName>.exe         the launcher
   index.txt             every downloadable file, written after everything else
@@ -50,10 +51,13 @@ in IEEE P1363 format (64 bytes).
    no control characters.
 3. `manifest.txt` matches its index entry (size + SHA-256), and every manifest entry is in the index
    with the same size. Otherwise a patch is being published right now: "try again in a minute".
-4. `aapatch status` lists which entries the local pak lacks. Only those are downloaded into
+4. Every index path starting with `files/` is a loose client file: `files/game/db/x` lands in
+   `<client>\game\db\x`. Each one whose size or SHA-256 differs is downloaded, checked against the index
+   and swapped in whole (resolved strictly inside the client folder).
+5. `aapatch status` lists which entries the local pak lacks. Only those are downloaded into
    `<client>\patch-download\` (resuming `.part` files over HTTP Range). Each is checked against the
    index's size and SHA-256 after unpacking.
-5. `aapatch apply` hashes every downloaded file against the manifest again, and only then writes into
+6. `aapatch apply` hashes every downloaded file against the manifest again, and only then writes into
    `game_pak`. The folder is deleted afterwards.
 
 A folder or `\\share` source skips steps 1–4: `aapatch apply` reads it directly. It still checks the
@@ -62,7 +66,7 @@ MD5s against the manifest, but the manifest itself is not signed.
 ## aapatch commands
 
 ```
-aapatch manifest <game_pak> <patchDir> <innerPath> [...]   export entries + write manifest.txt (server)
+aapatch manifest <game_pak> <patchDir> <innerPath|@listFile> [...]   export entries + write manifest.txt (server)
 aapatch apply    <game_pak> <patchDir>                     bring a pak up to date (player)
 aapatch status   <game_pak> <patchDir>                     dry run: exit 0 up to date, 1 pending
 aapatch verify   <game_pak> <patchDir>                     like status, ignores the marker, hashes contents

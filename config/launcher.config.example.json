@@ -41,5 +41,11 @@
 
   // Written once into Documents\ArcheAge\system.cfg as "locale = <value>" (e.g. "en_us") for clients
   // that would otherwise start in another language. Empty = leave system.cfg alone.
-  "clientLocale": ""
+  "clientLocale": "",
+
+  // Other clients (see docs/configuration.md): the folder of archeage.exe, the command line Play passes
+  // (empty = the stock "-k passport" line) and an optional program to start instead of archeage.exe.
+  "clientDir": "Bin64",
+  "clientArguments": "",
+  "startExe": ""
 }

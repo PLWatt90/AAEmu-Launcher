@@ -1,5 +1,7 @@
 # AAEmu-Launcher
 
+[![tests](https://github.com/PLWatt90/AAEmu-Launcher/actions/workflows/tests.yml/badge.svg)](https://github.com/PLWatt90/AAEmu-Launcher/actions/workflows/tests.yml)
+
 A Windows launcher and patch system for ArcheAge clients that play on an
 [AAEmu](https://github.com/AAEmu) server.
 
@@ -227,6 +229,10 @@ file, a wrong key, no key, a `.pem` request and signed `../` paths. It also cove
 (from the patch server and from a folder source, including the size + time fast path), publishing a
 second time with a changed `looseFiles` list, the `clientArguments` placeholders and the password
 token formula. No game client is needed, and everything stays in `tests\work\`.
+
+GitHub Actions runs the same script on every push to `main` and on every pull request, under both
+PowerShell 7 and Windows PowerShell 5.1 (`.github/workflows/tests.yml`). Pull requests from forks run
+with a read-only token and no secrets.
 
 ## Troubleshooting
 

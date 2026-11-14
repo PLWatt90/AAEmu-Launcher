@@ -31,6 +31,10 @@ jobs:
       fail-fast: false
       matrix:
         shell: [pwsh, powershell]
+    # The matrix picks the shell here: a step's own "shell" may not use the matrix context.
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
     steps:
       - uses: actions/checkout@v7
 
@@ -39,5 +43,4 @@ jobs:
           dotnet-version: 10.0.x
 
       - name: Build everything and run the end-to-end tests
-        shell: ${{ matrix.shell }}
         run: ./tests/Run-Tests.ps1

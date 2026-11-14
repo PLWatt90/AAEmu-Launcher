@@ -6,7 +6,8 @@
   Needs no game client and touches nothing outside tests\work: it makes a throwaway signing key, a
   "server" game_pak with test entries, publishes it with scripts\Make-Patch.ps1, serves it with the
   patch server on a local port and drives the launcher's --test-update mode against empty client paks.
-  Then it checks that tampered, unsigned or path-escaping patches are refused.
+  Then it checks that tampered, unsigned or path-escaping patches are refused, that loose client files
+  arrive from the patch server and from a folder source, and that publishing again only touches what changed.
 
   Run from the repository root:  powershell -ExecutionPolicy Bypass -File tests\Run-Tests.ps1
 #>
@@ -55,14 +56,21 @@ $patchDir = Join-Path $W 'patch'
 New-Item -ItemType Directory (Join-Path $src 'tools\sub') | Out-Null
 'tool one' | Set-Content (Join-Path $src 'tools\one.txt')
 'tool two' | Set-Content (Join-Path $src 'tools\sub\two.txt')
-@{ pak = $serverPak; patchDir = $patchDir; signingKey = $key; entriesFile = 'entries.txt'; extraFiles = @(); copyToClients = @()
-   looseFiles = @(@{ from = "$src\loose.db"; to = 'game/db/loose.db' }, @{ from = "$src\tools"; to = 'tools' }) } |
-    ConvertTo-Json -Depth 4 | Set-Content (Join-Path $W 'publish.config.json')
-& (Join-Path $Repo 'scripts\Make-Patch.ps1') -Config (Join-Path $W 'publish.config.json') -NoBuild | Out-Null
+# The sources are an hour old, so a file edited during the test never has its published time by accident.
+Get-ChildItem $src -Recurse -File | ForEach-Object { $_.LastWriteTimeUtc = [DateTime]::UtcNow.AddHours(-1) }
+$looseBig = @{ from = "$src\big.bin"; to = 'data/big.bin' }     # 3 MB: travels as .gz
+$looseTools = @{ from = "$src\tools"; to = 'tools' }
+function Publish([object[]]$looseFiles, [string]$dir = $patchDir) {
+    @{ pak = $serverPak; patchDir = $dir; signingKey = $key; entriesFile = 'entries.txt'; extraFiles = @(); copyToClients = @()
+       looseFiles = $looseFiles } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $W 'publish.config.json')
+    & (Join-Path $Repo 'scripts\Make-Patch.ps1') -Config (Join-Path $W 'publish.config.json') -NoBuild | Out-Null
+}
+Publish @(@{ from = "$src\loose.db"; to = 'game/db/loose.db' }, $looseTools, $looseBig)
 Check 'Make-Patch wrote a signed index' ((Test-Path "$patchDir\index.txt") -and (Test-Path "$patchDir\index.txt.sig"))
 Check 'large file got a .gz copy' (Test-Path "$patchDir\game\test\big.bin.gz")
 $indexText = [IO.File]::ReadAllText("$patchDir\index.txt")
 Check 'loose files are in the signed index' ($indexText -match 'files/game/db/loose.db\|' -and $indexText -match 'files/tools/sub/two.txt\|')
+Check 'large loose file got a .gz copy' (Test-Path "$patchDir\files\data\big.bin.gz")
 
 # ---- client: launcher copy configured by a side launcher.config.json
 $clientTool = Join-Path $W 'launcher'
@@ -94,6 +102,11 @@ function New-Client([string]$name) {
 function Update([string]$dir, [string]$source = $url) {
     return Invoke-Launcher @('--test-update', "$dir\game_pak", $source, $clientTool, '127.0.0.1')
 }
+# The same with the client's own folder as the client root (loose files and aapatch.exe land in $dir).
+function UpdateIn([string]$dir, [string]$source, [string]$mode = '--test-update') {
+    return Invoke-Launcher @($mode, "$dir\game_pak", $source, $dir, '127.0.0.1')
+}
+function Sha([string]$path) { return (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash }
 
 function Start-PatchServer([string]$root) {
     $process = Start-Process $serverExe -ArgumentList @('--root', "`"$root`"", '--port', $Port) -PassThru -WindowStyle Hidden
@@ -115,11 +128,31 @@ try {
     Check 'A: update applies the patch' ($r.Code -eq 0 -and $r.Text -match 'signature verified') $r.Text
     $r = Update $a
     Check 'A: second run is up to date' ($r.Code -eq 0 -and $r.Text -match 'up to date') $r.Text
+    Check 'A: second run takes the loose files as current' ($r.Text -match 'Client files: all 4 up to date\.') $r.Text
     & $aapatch verify "$a\game_pak" $patchDir | Out-Null
     Check 'A: aapatch verify' ($LASTEXITCODE -eq 0)
     # --test-update uses the tool folder as the client root, so the loose files land there
     Check 'A: loose files written into the client folder' (((Get-Content "$clientTool\game\db\loose.db") -eq 'loose database') -and
-        ((Get-Content "$clientTool\tools\sub\two.txt") -eq 'tool two'))
+        ((Get-Content "$clientTool\tools\sub\two.txt") -eq 'tool two') -and ((Sha "$clientTool\data\big.bin") -eq (Sha "$src\big.bin")))
+
+    # M: the fast path. A loose file with the index's size and time is not hashed (so an edit that keeps
+    # both goes unnoticed, as docs/patch-format.md says); once the time differs it is hashed and restored.
+    $looseLocal = "$clientTool\game\db\loose.db"
+    $stamp = (Get-Item $looseLocal).LastWriteTimeUtc
+    $good = [IO.File]::ReadAllBytes($looseLocal)
+    $edited = [byte[]]$good.Clone(); $edited[0] = $edited[0] -bxor 1
+    [IO.File]::WriteAllBytes($looseLocal, $edited); (Get-Item $looseLocal).LastWriteTimeUtc = $stamp
+    $r = Update $a
+    Check 'M: same size and time is taken as current without hashing' ($r.Code -eq 0 -and $r.Text -match 'Client files: all 4 up to date\.' -and
+        (Sha $looseLocal) -ne (Sha "$src\loose.db")) $r.Text
+    (Get-Item $looseLocal).LastWriteTimeUtc = [DateTime]::UtcNow
+    $r = Update $a
+    Check 'M: same-size edit with another time is restored' ($r.Code -eq 0 -and (Sha $looseLocal) -eq (Sha "$src\loose.db") -and
+        (Get-Item $looseLocal).LastWriteTimeUtc -eq $stamp) $r.Text
+    (Get-Item $looseLocal).LastWriteTimeUtc = $stamp.AddDays(-3)
+    $r = Update $a
+    Check 'M: right content under another time is re-checked and stamped' ($r.Code -eq 0 -and $r.Text -match '1 re-checked by SHA-256' -and
+        (Get-Item $looseLocal).LastWriteTimeUtc -eq $stamp) $r.Text
 
     # J: a loose file changed on the client is restored; a loose file swapped on the server is refused
     'edited by the player' | Set-Content "$clientTool\game\db\loose.db"
@@ -195,6 +228,41 @@ try {
     Stop-Process $server -Force -ErrorAction SilentlyContinue
 }
 
+# L: a folder source (unsigned by design) brings the loose files too, checked against the folder's index.txt
+$l = New-Client 'clientL'
+$r = UpdateIn $l $patchDir '--test-status'
+Check 'L: folder dry run lists pending loose files' ($r.Code -eq 1 -and $r.Text -match 'Client files: 4 of 4 to update' -and -not (Test-Path "$l\tools")) $r.Text
+$r = UpdateIn $l $patchDir
+Check 'L: folder source applies the patch and the loose files' ($r.Code -eq 0 -and ((Get-Content "$l\game\db\loose.db") -eq 'loose database') -and
+    ((Get-Content "$l\tools\sub\two.txt") -eq 'tool two') -and ((Sha "$l\data\big.bin") -eq (Sha "$src\big.bin"))) $r.Text
+$r = UpdateIn $l $patchDir '--test-status'
+Check 'L: folder second run is up to date' ($r.Code -eq 0 -and $r.Text -match 'Client files: all 4 up to date\.') $r.Text
+Remove-Item "$l\tools\one.txt"
+$r = UpdateIn $l $patchDir '--test-status'
+Check 'L: folder dry run reports a missing loose file as pending' ($r.Code -eq 1 -and $r.Text -match 'update   tools/one.txt') $r.Text
+# the folder's copy differs from the folder's index.txt -> refused, nothing written
+$served = "$patchDir\files\tools\one.txt"
+Copy-Item $served "$W\one.bak" -Force
+'tampered' | Set-Content $served
+$r = UpdateIn $l $patchDir
+Check 'L: folder copy that does not match its index refused' ($r.Code -ne 0 -and $r.Text -match "does not match the folder's index.txt" -and
+    -not (Test-Path "$l\tools\one.txt") -and -not (Test-Path "$l\tools\one.txt.tmp")) $r.Text
+Copy-Item "$W\one.bak" $served -Force
+$r = UpdateIn $l $patchDir
+Check 'L: restored folder copy accepted' ($r.Code -eq 0 -and ((Get-Content "$l\tools\one.txt") -eq 'tool one')) $r.Text
+# an index naming a path outside the client folder is refused for a folder source as well
+$r = UpdateIn $l $evil
+Check 'L: folder index with ../ path refused' ($r.Code -ne 0 -and $r.Text -match 'unsafe path' -and
+    @(Get-ChildItem (Split-Path $W) -Recurse -Filter evil.txt -ErrorAction SilentlyContinue).Count -eq 0) $r.Text
+# a folder with files\ but no index.txt: the pak is patched, the loose files are skipped with one clear line
+$noIndex = Join-Path $W 'patch-noindex'
+Copy-Item $patchDir $noIndex -Recurse
+Remove-Item "$noIndex\index.txt", "$noIndex\index.txt.sig"
+$n = New-Client 'clientN'
+$r = UpdateIn $n $noIndex
+Check 'L: folder without index.txt says loose files were not updated' ($r.Code -eq 0 -and $r.Text -match 'no index.txt, so the loose client files were NOT updated' -and
+    -not (Test-Path "$n\tools")) $r.Text
+
 # I: tokens match the documented formula (docs/login-protocol.md)
 $token = (Invoke-Launcher @('--print-token', 'Alice', 'correct horse')).Text.Trim()
 $expected = 'v1:' + [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes('aaemu-launcher|alice|correct horse'))).Replace('-', '').ToLower()
@@ -202,12 +270,46 @@ Check 'I: password token formula' ($token -eq $expected) "$token <> $expected"
 
 # K: clientDir / clientArguments placeholders build the start command line
 @{ patchPublicKey = $publicKey; authPort = 1237; clientDir = 'bin32'
-   clientArguments = '--client "{clientExe}" --login {server}:{port} --user {account}' } |
+   clientArguments = '--client "{clientExe}" --login {server}:{port} --user {account} --root "{root}"' } |
     ConvertTo-Json | Set-Content (Join-Path $clientTool 'launcher.config.json')
 $argsLine = (Invoke-Launcher @('--print-args', 'Alice', '10.0.0.5', 'pw')).Text
 Check 'K: clientArguments placeholders' ($argsLine -match [regex]::Escape('--login 10.0.0.5:1237 --user Alice') -and
-    $argsLine -match [regex]::Escape('\bin32\archeage.exe"')) $argsLine
+    $argsLine -match [regex]::Escape('--client "' + $clientTool + '\bin32\archeage.exe"') -and
+    $argsLine -match [regex]::Escape('--root "' + $clientTool + '"')) $argsLine
 Set-SideConfig $publicKey
+
+# N: publishing again. One entry left looseFiles, one file changed, the rest is unchanged: unchanged files
+# and their .gz are not rewritten, the stale file goes after the new index is written.
+$marker = [DateTime]::new(2020, 1, 2, 3, 4, 5, [DateTimeKind]::Utc)
+(Get-Item "$patchDir\files\tools\one.txt").LastWriteTimeUtc = $marker      # a rewrite would bring the source's time back
+$gzBefore = (Get-Item "$patchDir\files\data\big.bin.gz").LastWriteTimeUtc
+New-Item -ItemType Directory "$patchDir\files\old" | Out-Null
+'left over' | Set-Content "$patchDir\files\old\gone.bin"
+'left over' | Set-Content "$patchDir\files\old\gone.bin.gz"
+'tool two, second edition' | Set-Content "$src\tools\sub\two.txt"
+Publish @($looseTools, $looseBig)
+$indexText = [IO.File]::ReadAllText("$patchDir\index.txt")
+Check 'N: stale loose files removed from the folder and the index' (-not (Test-Path "$patchDir\files\game") -and -not (Test-Path "$patchDir\files\old") -and
+    $indexText -notmatch 'files/game/db/loose.db' -and $indexText -match 'files/tools/one.txt\|')
+Check 'N: unchanged loose file and .gz not rewritten' ((Get-Item "$patchDir\files\tools\one.txt").LastWriteTimeUtc -eq $marker -and
+    (Get-Item "$patchDir\files\data\big.bin.gz").LastWriteTimeUtc -eq $gzBefore) "$((Get-Item "$patchDir\files\tools\one.txt").LastWriteTimeUtc)"
+Check 'N: changed loose file published' ((Get-Content "$patchDir\files\tools\sub\two.txt") -eq 'tool two, second edition')
+$server = Start-PatchServer $patchDir
+try {
+    $r = Update $a
+    Check 'N: republished folder is signed and reaches the client' ($r.Code -eq 0 -and $r.Text -match 'signature verified' -and
+        ((Get-Content "$clientTool\tools\sub\two.txt") -eq 'tool two, second edition')) $r.Text
+} finally {
+    Stop-Process $server -Force -ErrorAction SilentlyContinue
+}
+# no looseFiles and no files\ folder: nothing is created
+$plain = Join-Path $W 'patch-plain'
+Publish @() $plain
+Check 'N: no looseFiles, no files folder' ((Test-Path "$plain\index.txt") -and -not (Test-Path "$plain\files"))
+# looseFiles emptied on a folder that had some: files\ goes away, after the index
+Publish @() $patchDir
+Check 'N: emptied looseFiles removes the files folder' (-not (Test-Path "$patchDir\files") -and
+    [IO.File]::ReadAllText("$patchDir\index.txt") -notmatch '(?m)^files/')
 
 Write-Host ''
 if ($script:failures -eq 0) { Write-Host 'All tests passed.' -ForegroundColor Green; exit 0 }

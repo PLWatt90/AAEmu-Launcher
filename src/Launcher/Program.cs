@@ -1,14 +1,15 @@
 // AAEmu-Launcher - GUI launcher for an AAEmu server's ArcheAge client.
 //
-// Sits in the top folder of a client installation (next to Bin64\ and game_pak). On Play it
-//   (a) refuses when Bin64\archeage.exe is missing,
+// Sits in the top folder of a client installation (next to Bin64\ and game_pak; the config's clientDir
+// names another folder than Bin64). On Play it
+//   (a) refuses when <clientDir>\archeage.exe is missing,
 //   (b) when the config names a ClientLocale, writes a fresh Documents\ArcheAge\system.cfg with
 //       "locale = <ClientLocale>" once (marker system.cfg.lan-locale, previous file kept as
 //       system.cfg.before-lan; AACFGDIR overrides the folder),
 //   (c) brings game_pak up to date from the patch source (signed HTTP patch server, or a folder / share)
 //       with "aapatch apply" (skipped with a warning while this folder's archeage.exe runs; given up
-//       after 15 minutes),
-//   (d) starts Bin64\archeage.exe with the launcher passport. With AuthMode Password its strUserToken
+//       after 15 minutes), and the loose client files the source's index.txt lists under files/,
+//   (d) starts <clientDir>\archeage.exe with the launcher passport. With AuthMode Password its strUserToken
 //       carries the account's password token (see LauncherCore.BuildToken), never the password itself.
 // Server-specific values come from LauncherConfig (launcher.config.json); per-player settings live in
 // launcher.json next to the exe. No password is ever written to a file or the log.
@@ -54,7 +55,7 @@ internal static class Program
     /// <summary>The exe's own file name (from the assembly name), used to find launcher updates on the patch source.</summary>
     public static string LauncherExe { get; } = (typeof(Program).Assembly.GetName().Name ?? "AAEmu-Launcher") + ".exe";
 
-    /// <summary>Window title, e.g. "ArcheAge Launcher 1.4.0".</summary>
+    /// <summary>Window title, e.g. "ArcheAge Launcher 1.5.0".</summary>
     public static string WindowTitle => $"{Config.ProductName} {(Config.Subtitle.Length > 0 ? Config.Subtitle : "Launcher")} {VersionText}";
 
     /// <summary>Folder holding the launcher exe (= the client root when installed as intended).</summary>
@@ -117,7 +118,9 @@ internal static class Program
                 case "--print-args":
                     if (args.Length < 4)
                         return TestUsage();
-                    Console.WriteLine("archeage.exe " + LauncherCore.BuildArguments(args[1], args[2], LauncherCore.BuildToken(args[1], args[3]),
+                    // {root} / {clientExe} resolve against the launcher's own folder, as they do on Play.
+                    Console.WriteLine("archeage.exe " + new LauncherCore(ExeDir, Console.WriteLine).BuildArguments(
+                        args[1], args[2], LauncherCore.BuildToken(args[1], args[3]),
                         args.Length > 4 ? LauncherCore.BuildPinToken(args[1], args[4]) : ""));
                     return 0;
                 case "--print-pin-token":
@@ -291,10 +294,11 @@ internal sealed class LauncherCore
         _log = log ?? (_ => { });
     }
 
-    /// <summary>Client root: the folder holding Bin64\ and game_pak (the launcher's own folder).</summary>
+    /// <summary>Client root: the folder holding Bin64\ (or the config's clientDir) and game_pak (the launcher's own folder).</summary>
     public string RootDir { get; }
-    public string Bin64Dir => Path.Combine(RootDir, Program.Config.ClientDir);
-    public string ClientExe => Path.Combine(Bin64Dir, "archeage.exe");
+    /// <summary>The folder of archeage.exe: the config's clientDir under the client root (Bin64 by default).</summary>
+    public string ClientExeDir => Path.Combine(RootDir, Program.Config.ClientDir);
+    public string ClientExe => Path.Combine(ClientExeDir, "archeage.exe");
     public string PakPath => Path.Combine(RootDir, "game_pak");
 
     /// <summary>Shortest password the launcher sends; the first launcher login sets the account's password.</summary>
@@ -352,7 +356,7 @@ internal sealed class LauncherCore
     {
         if (File.Exists(ClientExe))
             return true;
-        _log($"archeage.exe not found in \"{Bin64Dir}\". Put this launcher in the client folder, next to Bin64 and game_pak.");
+        _log($"archeage.exe not found in \"{ClientExeDir}\". Put this launcher in the client folder, next to {Program.Config.ClientDir} and game_pak.");
         return false;
     }
 
@@ -403,8 +407,10 @@ internal sealed class LauncherCore
     public UpdateOutcome UpdatePak(string share, string server, bool dryRun) => UpdatePak(PakPath, share, server, dryRun);
 
     /// <summary>
-    /// Folder or share source: when it holds manifest.txt, copy aapatch.exe from it if missing or newer
-    /// and run "aapatch apply|status pak share" with its output streamed into the log.
+    /// Folder or share source: when it holds manifest.txt, copy aapatch.exe from it if missing or newer,
+    /// bring the loose client files up to date when it also holds an index.txt (SyncLooseFilesFromFolder)
+    /// and run "aapatch apply|status pak share" with its output streamed into the log. Nothing from a
+    /// folder or share is signature-checked; an http(s) source goes through UpdatePakHttp instead.
     /// </summary>
     public UpdateOutcome UpdatePak(string pakPath, string share, string server, bool dryRun)
     {
@@ -495,6 +501,19 @@ internal sealed class LauncherCore
             return new UpdateOutcome(UpdateKind.Failed, 2);
         }
 
+        // Loose client files, before the pak like the HTTP path does. A copy that does not match the
+        // folder's own index stops the update: the folder is half published or damaged.
+        int loosePending;
+        try
+        {
+            loosePending = SyncLooseFilesFromFolder(share, dryRun);
+        }
+        catch (Exception exception)
+        {
+            _log($"Updating the client files from {share} failed: {exception.Message}");
+            return new UpdateOutcome(UpdateKind.Failed, 2);
+        }
+
         _log($"{(dryRun ? "Checking" : "Updating")} {pakPath} against {share} ...");
         var exitCode = RunPatchTool(localTool, dryRun ? "status" : "apply", pakPath, share, null);
         if (exitCode == null)
@@ -502,6 +521,8 @@ internal sealed class LauncherCore
         var outcome = UpdateOutcome.FromExitCode(exitCode.Value, dryRun);
         if (outcome.Kind == UpdateKind.ShareUnreachable)
             _log($"{PatchTool} found no {ManifestName} on the share; starting without checking game_pak.");
+        if (dryRun && loosePending > 0 && outcome.Kind == UpdateKind.UpToDate)
+            return new UpdateOutcome(UpdateKind.Pending, 1);
         return outcome;
     }
 
@@ -661,7 +682,7 @@ internal sealed class LauncherCore
         int loosePending;
         try
         {
-            loosePending = SyncLooseFiles(source, index, dryRun);
+            loosePending = SyncLooseFiles(index, dryRun, "downloading", HttpPatchSource.WireSize, source.Download);
         }
         catch (PatchTrustException exception)
         {
@@ -745,41 +766,80 @@ internal sealed class LauncherCore
     public const string LoosePrefix = "files/";
 
     /// <summary>
-    /// Brings every "files/..." entry of the signed index into the client root (download, size + SHA-256
-    /// check, swap in whole). Returns how many differed; in a dry run nothing is written.
+    /// Brings every "files/..." entry of the index into the client root: fetch (a download, or a copy from a
+    /// folder source) checks size + SHA-256 against the index and swaps the file in whole, stamped with the
+    /// index's modification time. A file that still has the entry's size and that time is taken as current
+    /// without reading it (HttpPatchSource.LooksCurrent), so a start with nothing to do hashes nothing; any
+    /// other file is hashed and, when it differs, fetched. Returns how many differed; in a dry run nothing
+    /// is written.
     /// </summary>
-    private int SyncLooseFiles(HttpPatchSource source, Dictionary<string, IndexEntry> index, bool dryRun)
+    private int SyncLooseFiles(Dictionary<string, IndexEntry> index, bool dryRun, string fetching,
+        Func<IndexEntry, long> transferSize, Action<IndexEntry, string> fetch)
     {
         var loose = index.Values.Where(e => e.Path.StartsWith(LoosePrefix, StringComparison.Ordinal)).OrderBy(e => e.Path, StringComparer.Ordinal).ToList();
         if (loose.Count == 0)
             return 0;
         var pending = new List<(IndexEntry Entry, string Target)>();
+        var hashed = 0;
         foreach (var entry in loose)
         {
             var target = HttpPatchSource.LocalPath(RootDir, entry.Path[LoosePrefix.Length..]);
+            if (HttpPatchSource.LooksCurrent(target, entry))
+                continue;
             if (!HttpPatchSource.FileMatches(target, entry.Size, entry.Sha256))
+            {
                 pending.Add((entry, target));
+                continue;
+            }
+            // The right content under another time (e.g. copied in by hand): stamp it, so later starts skip the hash.
+            hashed++;
+            if (dryRun)
+                continue;
+            try { File.SetLastWriteTimeUtc(target, entry.ModifiedUtc); }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { } // hashed again next time
         }
         if (pending.Count == 0)
         {
-            _log($"Client files: all {loose.Count} up to date.");
+            _log($"Client files: all {loose.Count} up to date{(hashed > 0 ? $" ({hashed} re-checked by SHA-256)" : "")}.");
             return 0;
         }
-        var wire = pending.Sum(p => HttpPatchSource.WireSize(p.Entry));
+        var size = pending.Sum(p => transferSize(p.Entry));
         if (dryRun)
         {
-            _log($"Client files: {pending.Count} of {loose.Count} to update ({wire / 1048576.0:N1} MB).");
+            _log($"Client files: {pending.Count} of {loose.Count} to update ({size / 1048576.0:N1} MB).");
             foreach (var p in pending)
                 _log("    update   " + p.Entry.Path[LoosePrefix.Length..]);
             return pending.Count;
         }
-        _log($"Client files: downloading {pending.Count} of {loose.Count} ({wire / 1048576.0:N1} MB) ...");
+        _log($"Client files: {fetching} {pending.Count} of {loose.Count} ({size / 1048576.0:N1} MB) ...");
         foreach (var p in pending)
         {
-            source.Download(p.Entry, p.Target);
+            fetch(p.Entry, p.Target);
             _log("    updated  " + p.Entry.Path[LoosePrefix.Length..]);
         }
         return pending.Count;
+    }
+
+    /// <summary>
+    /// The loose client files of a folder or share source: read the folder's index.txt (no signature check;
+    /// a folder source is trusted as it is) and copy each differing "files/..." entry from
+    /// &lt;folder&gt;\files\... into the client root, with the same path confinement as a download and a
+    /// size + SHA-256 check against that index before the file is swapped in. A folder without index.txt has
+    /// no loose files to offer; when it holds a files\ folder all the same, the log says they were skipped.
+    /// </summary>
+    private int SyncLooseFilesFromFolder(string folder, bool dryRun)
+    {
+        var indexPath = Path.Combine(folder, HttpPatchSource.IndexName);
+        if (!File.Exists(indexPath))
+        {
+            if (Directory.Exists(Path.Combine(folder, LoosePrefix.TrimEnd('/'))))
+                _log($"Client files: {folder} holds a files folder but no {HttpPatchSource.IndexName}, so the loose client files were NOT updated. " +
+                     "Publish the folder with Make-Patch.ps1, which writes the index.");
+            return 0;
+        }
+        var index = HttpPatchSource.ParseIndex(File.ReadAllText(indexPath, Encoding.UTF8));
+        return SyncLooseFiles(index, dryRun, "copying", entry => entry.Size,
+            (entry, target) => HttpPatchSource.CopyVerified(HttpPatchSource.LocalPath(folder, entry.Path), entry, target));
     }
 
     private UpdateOutcome Refused(string url, string reason)
@@ -809,7 +869,7 @@ internal sealed class LauncherCore
 
     // ---- (d) game already running -------------------------------------------------------
 
-    /// <summary>True while this folder's Bin64\archeage.exe runs (a client from another folder does not count).</summary>
+    /// <summary>True while this folder's &lt;clientDir&gt;\archeage.exe runs (a client from another folder does not count).</summary>
     public bool GameRunning() => ProcessRunningFrom("archeage", ClientExe);
 
     /// <summary>
@@ -868,8 +928,11 @@ internal sealed class LauncherCore
     public static string BuildPassport(string account, string server, string token, string pinToken = "") =>
         $$"""{"source":"launcher","strUserToken":"{{token}}","strPinToken":"{{pinToken}}","StrUserName":"{{account}}","serverId":"1","selectedServerId":"1","channelId":"1","subchannelId":"1","gameId":"1","sIp":"{{server}}","sIps":"{{server}}","sPort":"{{Program.AuthPort}}","PASSPORTSVRIP":"{{server}}","extension":""}""";
 
-    /// <summary>The archeage.exe argument string (quotes inside the passport escaped with a backslash).</summary>
-    public static string BuildArguments(string account, string server, string token, string pinToken = "")
+    /// <summary>
+    /// The archeage.exe argument string (quotes inside the passport escaped with a backslash). In a
+    /// clientArguments template {root} is this core's client root and {clientExe} its archeage.exe.
+    /// </summary>
+    public string BuildArguments(string account, string server, string token, string pinToken = "")
     {
         var passport = BuildPassport(account, server, token, pinToken).Replace("\"", "\\\"");
         var template = Program.Config.ClientArguments;
@@ -878,19 +941,13 @@ internal sealed class LauncherCore
                 .Replace("{account}", account).Replace("{server}", server)
                 .Replace("{port}", Program.AuthPort.ToString(System.Globalization.CultureInfo.InvariantCulture))
                 .Replace("{token}", token).Replace("{pinToken}", pinToken).Replace("{passport}", passport)
-                .Replace("{root}", RootDirForArgs).Replace("{clientExe}", ClientExeForArgs);
+                .Replace("{root}", RootDir.TrimEnd(Path.DirectorySeparatorChar)).Replace("{clientExe}", ClientExe);
         return $"-k \"{passport}\" +auth_serveraddr {server} +auth_serverport {Program.AuthPort} +auth_ip {server} +auth_port {Program.AuthPort}";
     }
-
-    // Paths for the {root} / {clientExe} placeholders (set by StartGame; the client root of this launcher).
-    private static string RootDirForArgs = Program.ExeDir.TrimEnd(Path.DirectorySeparatorChar);
-    private static string ClientExeForArgs = Path.Combine(RootDirForArgs, Program.Config.ClientDir, "archeage.exe");
 
     public void StartGame(string account, string server, string password, string pin)
     {
         _log($"Starting ArcheAge as account \"{account}\" against {server}:{Program.AuthPort} ...");
-        RootDirForArgs = RootDir.TrimEnd(Path.DirectorySeparatorChar);
-        ClientExeForArgs = ClientExe;
         var startExe = Program.Config.StartExe.Length > 0 ? Path.Combine(RootDir, Program.Config.StartExe) : ClientExe;
         if (!File.Exists(startExe))
             throw new FileNotFoundException($"{startExe} not found");
@@ -899,7 +956,7 @@ internal sealed class LauncherCore
             FileName = startExe,
             Arguments = BuildArguments(account, server, BuildToken(account, password),
                 pin.Length > 0 ? BuildPinToken(account, pin) : ""), // verbatim
-            WorkingDirectory = Program.Config.StartExe.Length > 0 ? Path.GetDirectoryName(startExe)! : Bin64Dir,
+            WorkingDirectory = Program.Config.StartExe.Length > 0 ? Path.GetDirectoryName(startExe)! : ClientExeDir,
             UseShellExecute = true,
         };
         using var process = Process.Start(info) ?? throw new InvalidOperationException("Windows did not start the process.");

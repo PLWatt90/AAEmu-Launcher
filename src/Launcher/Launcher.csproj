@@ -9,7 +9,7 @@
     <LauncherName Condition="'$(LauncherName)' == ''">AAEmu-Launcher</LauncherName>
     <AssemblyName>$(LauncherName)</AssemblyName>
     <RootNamespace>AAEmuLauncher</RootNamespace>
-    <Version>1.4.0</Version>
+    <Version>1.5.0</Version>
     <InvariantGlobalization>true</InvariantGlobalization>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <!-- Published as one self-contained exe so players need no .NET install:

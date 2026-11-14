@@ -44,7 +44,7 @@ also lists the sources, and warns about unknown setting names.
 
 1.2 clients on [AAEmu-1.2-Rust](https://github.com/AAEmu/AAEmu-1.2-Rust), started through its `aaemu-launcher`
 (login ticket + `aadriver`). Publish `aaemu-launcher.exe` and its `aadriver\` folder as loose files under
-`aaemu-rs/` (see `looseFiles` below), plus a small `avvia.cmd`/`start.cmd` that runs
+`aaemu-rs/` (see `looseFiles` below), plus a small `start.cmd` that runs
 `"%~dp0aaemu-launcher.exe" %*` (it prompts for the password):
 
 ```json
@@ -64,6 +64,10 @@ A source that answers with a bad signature never falls back; the game is not sta
 be reached, the game starts without updating. A player can type any URL, local folder or `\\server\share`
 into the Patch source field. An empty field means the default.
 
+A folder or `\\server\share` source is not signed. It updates `game_pak` and, when it holds the
+`index.txt` Make-Patch writes, the loose client files too (see
+[patch format](patch-format.md#folder-and-share-sources)).
+
 ## publish.config.json
 
 | Setting | Meaning |
@@ -74,7 +78,7 @@ into the Patch source field. An empty field means the default.
 | `entriesFile` | Inner pak paths to publish, relative to the config folder. Default `patch-entries.txt`. |
 | `extraFiles` | Files copied into `patchDir` as they are (e.g. a player README). Not part of the pak patch or the signed index. |
 | `copyToClients` | Client folders on this machine that should also get the fresh `aapatch.exe` and launcher. |
-| `looseFiles` | Loose client files, outside `game_pak`: `[{ "from": "<file or folder here>", "to": "<path under the client root>" }]`. Published under `files/<to>` in the signed index; the launcher writes them into the client folder. For data the client reads loose (e.g. the 1.2 client's `game/db/compact.sqlite3`) or helper programs. |
+| `looseFiles` | Loose client files, outside `game_pak`: `[{ "from": "<file or folder here>", "to": "<path under the client root>" }]`. Published under `files/<to>` in the signed index; the launcher writes them into the client folder. For data the client reads loose (e.g. the 1.2 client's `game/db/compact.sqlite3`) or helper programs. Make-Patch copies only new or changed files into `patchDir\files` and removes the ones you took off the list after the new index is written. |
 
 The entries file may be long: Make-Patch hands it to `aapatch manifest` as `@<list file>`, so the
 Windows command-line limit does not apply.

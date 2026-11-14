@@ -214,6 +214,19 @@ internal sealed class HttpPatchSource
         return Hex(SHA256.HashData(stream)) == sha256;
     }
 
+    /// <summary>
+    /// The cheap check for a file an earlier run put in place: Download and CopyVerified stamp the file
+    /// with the index's modification time, so the same size and that time (2 s tolerance: FAT/exFAT round
+    /// timestamps) are taken as "unchanged" without reading the file. Only for files already on this PC;
+    /// nothing fetched from a patch source is ever accepted on size and time alone.
+    /// </summary>
+    public static bool LooksCurrent(string path, IndexEntry entry)
+    {
+        var info = new FileInfo(path);
+        return info.Exists && info.Length == entry.Size
+               && (info.LastWriteTimeUtc - entry.ModifiedUtc).Duration() <= TimeSpan.FromSeconds(2);
+    }
+
     public static bool BytesMatch(byte[] data, IndexEntry entry) =>
         data.LongLength == entry.Size && Hex(SHA256.HashData(data)) == entry.Sha256;
 
@@ -242,11 +255,44 @@ internal sealed class HttpPatchSource
 
         FetchWithResume(remotePath, part, wireSize);
 
-        var unpacked = target + ".tmp";
-        string sha256;
-        long length = 0;
+        bool matches;
+        long length;
         using (var input = File.OpenRead(part))
         using (var source = gz ? new GZipStream(input, CompressionMode.Decompress) : (Stream)input)
+            matches = StoreVerified(source, entry, target, out length);
+        File.Delete(part);
+        if (!matches)
+            throw new InvalidDataException($"{entry.Path} does not match the signed index (got {length:N0} bytes). " +
+                                           "The server may be publishing a new patch; try again in a minute.");
+    }
+
+    /// <summary>
+    /// The folder / share counterpart of Download: copies sourceFile to target, checks size and SHA-256
+    /// against the folder's index entry and swaps it in whole, with the index's modification time.
+    /// Throws when the folder's copy does not match its index; target is then left as it was.
+    /// </summary>
+    public static void CopyVerified(string sourceFile, IndexEntry entry, string target)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        bool matches;
+        long length;
+        using (var source = File.OpenRead(sourceFile))
+            matches = StoreVerified(source, entry, target, out length);
+        if (!matches)
+            throw new InvalidDataException($"{entry.Path} does not match the folder's {IndexName} (got {length:N0} bytes). " +
+                                           "The folder may be receiving a new patch; try again in a minute.");
+    }
+
+    /// <summary>
+    /// Writes source into target + ".tmp" while hashing it. When size and SHA-256 are the entry's, the file
+    /// is swapped in as target with the index's modification time (true); otherwise the .tmp is deleted and
+    /// target stays untouched (false). length is what was read, for the caller's message.
+    /// </summary>
+    private static bool StoreVerified(Stream source, IndexEntry entry, string target, out long length)
+    {
+        var unpacked = target + ".tmp";
+        string sha256;
+        length = 0;
         using (var output = File.Create(unpacked))
         using (var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
         {
@@ -255,22 +301,21 @@ internal sealed class HttpPatchSource
             while ((read = source.Read(buffer, 0, buffer.Length)) > 0)
             {
                 length += read;
-                if (length > entry.Size) // a .gz that unpacks beyond the indexed size is refused at once
+                if (length > entry.Size) // a source that yields more than the indexed size is refused at once
                     break;
                 output.Write(buffer, 0, read);
                 hasher.AppendData(buffer, 0, read);
             }
             sha256 = Hex(hasher.GetHashAndReset());
         }
-        File.Delete(part);
         if (length != entry.Size || sha256 != entry.Sha256)
         {
             File.Delete(unpacked);
-            throw new InvalidDataException($"{entry.Path} does not match the signed index (got {length:N0} bytes). " +
-                                           "The server may be publishing a new patch; try again in a minute.");
+            return false;
         }
         File.Move(unpacked, target, overwrite: true);
         File.SetLastWriteTimeUtc(target, entry.ModifiedUtc);
+        return true;
     }
 
     private void FetchWithResume(string remotePath, string part, long wireSize)

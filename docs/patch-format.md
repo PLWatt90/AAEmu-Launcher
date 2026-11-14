@@ -52,16 +52,57 @@ in IEEE P1363 format (64 bytes).
 3. `manifest.txt` matches its index entry (size + SHA-256), and every manifest entry is in the index
    with the same size. Otherwise a patch is being published right now: "try again in a minute".
 4. Every index path starting with `files/` is a loose client file: `files/game/db/x` lands in
-   `<client>\game\db\x`. Each one whose size or SHA-256 differs is downloaded, checked against the index
-   and swapped in whole (resolved strictly inside the client folder).
+   `<client>\game\db\x` (resolved strictly inside the client folder). A file that differs is downloaded,
+   checked against the index's size and SHA-256, swapped in whole and stamped with the index's
+   `modifiedUtc`. See [the fast path](#loose-files-the-fast-path) for how "differs" is decided.
 5. `aapatch status` lists which entries the local pak lacks. Only those are downloaded into
    `<client>\patch-download\` (resuming `.part` files over HTTP Range). Each is checked against the
    index's size and SHA-256 after unpacking.
 6. `aapatch apply` hashes every downloaded file against the manifest again, and only then writes into
    `game_pak`. The folder is deleted afterwards.
 
-A folder or `\\share` source skips steps 1–4: `aapatch apply` reads it directly. It still checks the
-MD5s against the manifest, but the manifest itself is not signed.
+### Loose files: the fast path
+
+Hashing a 400 MB loose file takes a second or more, so the launcher does not do it on every Play.
+A loose file on the player's PC counts as current, without being read, when
+
+- its size equals the index's size, and
+- its last-write time equals the index's `modifiedUtc` (2 s tolerance), which is the time the launcher
+  stamped it with when it put the file there.
+
+Any other file is hashed. If the SHA-256 matches, the file is kept and stamped, so the next start is
+fast again; if not, it is downloaded.
+
+What this trusts is the player's own disk, nothing else: a loose file changed on the PC by something
+that keeps both its size and its time is not noticed. Deleting the file, or changing its time, makes
+the launcher check it properly again. Nothing that comes from a patch source is accepted this way;
+every downloaded or copied file is still checked by size and SHA-256 before it replaces anything.
+
+For the server side this means a new version of a loose file must differ in size or time from the one
+published before. `Make-Patch.ps1` compares loose files by content, and gives a changed file a new
+time if it would otherwise keep the old size and time.
+
+### Folder and `\\share` sources
+
+A folder or `\\share` source is **not signed**: steps 1 and 3 do not apply, and whoever can write to the
+folder decides what players get. Only use one on a network you control.
+
+- `game_pak`: `aapatch apply` reads the folder directly (steps 5 and 6 without the download). It still
+  checks the MD5s against the manifest, but the manifest itself is not signed.
+- Loose files: when the folder holds an `index.txt`, the launcher reads it without a signature check and
+  handles its `files/...` entries as in step 4, copying from `<folder>\files\...` instead of
+  downloading. The path rules of step 2, the confinement to the client folder, the fast path and the
+  size + SHA-256 check against that `index.txt` all apply. A copy that does not match the folder's
+  index stops the update and the game is not started.
+- A folder with a `files\` folder but no `index.txt` gets one log line saying the loose files were not
+  updated; `game_pak` is still patched.
+
+## Publishing over a live folder
+
+`Make-Patch.ps1` keeps the folder usable while it runs: it copies only loose files that are new or
+changed, leaves unchanged ones and their `.gz` alone, writes `index.txt` and `index.txt.sig` last, and
+only then deletes files under `files\` that are no longer published. A player who clicks Play during
+a publish gets "try again in a minute" for the files that are changing, not for the rest.
 
 ## aapatch commands
 

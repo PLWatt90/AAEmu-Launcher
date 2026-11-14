@@ -223,14 +223,16 @@ powershell -ExecutionPolicy Bypass -File tests\Run-Tests.ps1
 This builds everything, makes a throwaway key and a test `game_pak`, publishes it, serves it on port
 8199, and runs the launcher's update step against empty client paks. It covers a full update, the
 no-op second run, `aapatch verify`, and refusal of a tampered index, a missing signature, a swapped
-file, a wrong key, no key, a `.pem` request and signed `../` paths. It also checks the password token
-formula. No game client is needed, and everything stays in `tests\work\`.
+file, a wrong key, no key, a `.pem` request and signed `../` paths. It also covers loose client files
+(from the patch server and from a folder source, including the size + time fast path), publishing a
+second time with a changed `looseFiles` list, the `clientArguments` placeholders and the password
+token formula. No game client is needed, and everything stays in `tests\work\`.
 
 ## Troubleshooting
 
 | Launcher log says | Fix |
 |---|---|
-| `archeage.exe not found` | The launcher must sit in the client's top folder, next to `Bin64\`. |
+| `archeage.exe not found` | The launcher must sit in the client's top folder, next to `Bin64\` (or the folder `clientDir` names). |
 | `Patch server ... not reachable` | Start the patch server; check the firewall/port forward; check `patchUrl` / the Server field. The game still starts, unpatched. |
 | `answers but has no manifest.txt / index.txt` | Run `scripts\Make-Patch.ps1`. |
 | `REFUSED: ... signature` | The launcher's `patchPublicKey` doesn't match the key that signed `index.txt`. Rebuild the launcher after `Setup-Server.ps1`, or you replaced the key. Players need the matching launcher. |

@@ -325,7 +325,7 @@ internal sealed partial class MainForm : Form
         if (retired)
             Log($"The server moved from {savedServer} to {Program.DefaultServer}; the Server field now holds the new address.");
         if (!File.Exists(_core.ClientExe))
-            Log($"WARNING: archeage.exe not found in \"{_core.Bin64Dir}\". Put this launcher in the client folder, next to Bin64 and game_pak.");
+            Log($"WARNING: archeage.exe not found in \"{_core.ClientExeDir}\". Put this launcher in the client folder, next to {Program.Config.ClientDir} and game_pak.");
         Status(File.Exists(Path.Combine(_core.RootDir, Settings.FileName)) ? "Settings loaded from launcher.json."
             : Trusted ? "Enter your account name and click Play." : "Enter your account name and password and click Login.");
         if (!settings.UpdatePak)

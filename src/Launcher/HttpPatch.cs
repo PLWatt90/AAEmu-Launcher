@@ -240,7 +240,8 @@ internal sealed class HttpPatchSource
     /// <summary>
     /// Downloads one indexed file to target (via the .gz copy when there is one), checks size and SHA-256
     /// against the signed index, and swaps it in whole; the file gets the index's modification time. A
-    /// target that already matches is left alone. A partial download (.part) is resumed. Throws on any failure.
+    /// target that already matches is left alone. A partial download (.part) is resumed; one that turns out
+    /// wrong or unreadable once complete is deleted, so the next try starts afresh. Throws on any failure.
     /// The caller picks target (a fixed name, or LocalPath under its download folder).
     /// </summary>
     public void Download(IndexEntry entry, string target)
@@ -256,10 +257,20 @@ internal sealed class HttpPatchSource
         FetchWithResume(remotePath, part, wireSize);
 
         bool matches;
-        long length;
-        using (var input = File.OpenRead(part))
-        using (var source = gz ? new GZipStream(input, CompressionMode.Decompress) : (Stream)input)
+        long length = 0;
+        try
+        {
+            using var input = File.OpenRead(part);
+            using var source = gz ? new GZipStream(input, CompressionMode.Decompress) : (Stream)input;
             matches = StoreVerified(source, entry, target, out length);
+        }
+        catch (InvalidDataException)
+        {
+            // The part is not (whole) gzip data, e.g. a resume that spanned a re-publish. It counts as a
+            // mismatch and is deleted below; kept, it would be found "complete" on every later start and
+            // fail the same way for good.
+            matches = false;
+        }
         File.Delete(part);
         if (!matches)
             throw new InvalidDataException($"{entry.Path} does not match the signed index (got {length:N0} bytes). " +
@@ -293,9 +304,10 @@ internal sealed class HttpPatchSource
         var unpacked = target + ".tmp";
         string sha256;
         length = 0;
-        using (var output = File.Create(unpacked))
-        using (var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
+        try
         {
+            using var output = File.Create(unpacked);
+            using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
             var buffer = new byte[1 << 20];
             int read;
             while ((read = source.Read(buffer, 0, buffer.Length)) > 0)
@@ -307,6 +319,13 @@ internal sealed class HttpPatchSource
                 hasher.AppendData(buffer, 0, read);
             }
             sha256 = Hex(hasher.GetHashAndReset());
+        }
+        catch
+        {
+            // Damaged gzip data, a read error, a full disk: never leave a half-written .tmp behind.
+            try { File.Delete(unpacked); }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { }
+            throw;
         }
         if (length != entry.Size || sha256 != entry.Sha256)
         {

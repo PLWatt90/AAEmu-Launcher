@@ -166,6 +166,20 @@ try {
     Check 'J: swapped loose file refused' ($r.Code -ne 0 -and -not (Test-Path "$clientTool\tools\one.txt")) $r.Text
     Copy-Item "$W\one.bak" $served -Force
 
+    # P: a partial download that looks complete but is not gzip data (e.g. a resume that spanned a
+    # re-publish) is dropped, so the next start downloads the file again instead of failing forever
+    $p = New-Client 'clientP'
+    New-Item -ItemType Directory "$p\data" | Out-Null
+    $junk = New-Object byte[] ((Get-Item "$patchDir\files\data\big.bin.gz").Length)
+    (New-Object Random 11).NextBytes($junk); $junk[0] = 0
+    [IO.File]::WriteAllBytes("$p\data\big.bin.gz.part", $junk)
+    $r = UpdateIn $p $url
+    Check 'P: corrupt partial download refused and removed' ($r.Code -ne 0 -and -not (Test-Path "$p\data\big.bin.gz.part") -and
+        -not (Test-Path "$p\data\big.bin.tmp") -and -not (Test-Path "$p\data\big.bin")) $r.Text
+    $r = UpdateIn $p $url
+    Check 'P: the next start downloads the file again' ($r.Code -eq 0 -and (Test-Path "$p\data\big.bin") -and
+        (Sha "$p\data\big.bin") -eq (Sha "$src\big.bin")) $r.Text
+
     # B: one byte of index.txt changed -> refused
     Copy-Item "$patchDir\index.txt" "$W\index.bak" -Force
     $text = [IO.File]::ReadAllText("$patchDir\index.txt"); [IO.File]::WriteAllText("$patchDir\index.txt", $text.Replace('|0|', '|1|'))
